@@ -203,8 +203,8 @@ def get_manifests(process: Process, manifest_root_name: str) -> list[tuple[str, 
                 else:
                     row["Index1"] = idx
                     # Assume long idx2 from recipe + no idx2 from label means idx2 is UMI
-                    if int(process.udf.get("Index read 2", 0)) > 12:
-                        row["Index2"] = "N" * int(process.udf["Index read 2"])
+                    if int(process.udf.get("Index Read 2", 0)) > 12:
+                        row["Index2"] = "N" * int(process.udf["Index Read 2"])
                     else:
                         row["Index2"] = ""
                 row["Lane"] = lane
@@ -259,7 +259,7 @@ def get_manifests(process: Process, manifest_root_name: str) -> list[tuple[str, 
 
     # Start building manifests
     manifests: list[tuple[str, str]] = []
-    for manifest_type in ["untrimmed", "trimmed", "empty"]:
+    for manifest_type in ["untrimmed", "trimmed", "phix", "empty"]:
         manifest_name, manifest_contents = make_manifest(
             df_samples_and_controls,
             process,
@@ -292,6 +292,7 @@ def make_manifest(
     ].copy()
 
     file_name = f"{manifest_root_name}_{manifest_type}.csv"
+
     runValues_section = "\n".join(
         [
             "[RUNVALUES]",
@@ -320,6 +321,10 @@ def make_manifest(
 
         samples_section = f"[SAMPLES]\n{df.to_csv(index=None, header=True)}"
 
+    elif manifest_type == "phix":
+        df = df[df["Project"] == "Control"]
+        samples_section = f"[SAMPLES]\n{df.to_csv(index=None, header=True)}"
+
     elif manifest_type == "empty":
         samples_section = ""
 
@@ -333,24 +338,8 @@ def make_manifest(
     return (file_name, manifest_contents)
 
 
-def fit_seq(seq: str, length: int, seq_extension: str | None = None) -> str:
-    """Fit a sequence to a given length by extending or truncating."""
-    if len(seq) == length:
-        return seq
-    elif len(seq) > length:
-        return seq[:length]
-    else:
-        if seq_extension is None:
-            raise AssertionError("Can't extend sequence without extension string.")
-        else:
-            if length - len(seq) > len(seq_extension):
-                raise AssertionError(
-                    "Extension string too short to fit sequence to desired length."
-                )
-            return seq + seq_extension[: length - len(seq)]
-
-
-def check_distances(rows: list[dict], threshold=3) -> None:
+def check_distances(rows: list[dict], threshold=2) -> None:
+    """Iterator function to check index distances between all pairs of samples."""
     for i in range(len(rows)):
         row = rows[i]
 
@@ -369,26 +358,28 @@ def check_pair_distance(row, row_comp, check_flips: bool = False, threshold: int
     """
 
     if check_flips:
-        flips = []
-        for a1, _a1 in zip(
-            [row["Index1"], revcomp(row["Index1"])], ["Index1", "Index1_rc"]
+        flips: list[tuple[int, str, str]] = []
+        for s1i1, s1i1_name in zip(
+            [row["Index1"], revcomp(row["Index1"])],
+            ["Index1", "Index1_rc"],
         ):
-            for a2, _a2 in zip(
-                [row["Index2"], revcomp(row["Index2"])], ["Index2", "Index2_rc"]
+            for s1i2, s1i2_name in zip(
+                [row["Index2"], revcomp(row["Index2"])],
+                ["Index2", "Index2_rc"],
             ):
-                for b1, _b1 in zip(
+                for s2i1, s2i1_name in zip(
                     [row_comp["Index1"], revcomp(row_comp["Index1"])],
                     ["Index1", "Index1_rc"],
                 ):
-                    for b2, _b2 in zip(
+                    for s2i2, s2i2_name in zip(
                         [row_comp["Index2"], revcomp(row_comp["Index2"])],
                         ["Index2", "Index2_rc"],
                     ):
                         flips.append(
                             (
-                                distance(a1, b1) + distance(a2, b2),
-                                f"{a1}-{a2} {b1}-{b2}",
-                                f"{_a1}-{_a2} {_b1}-{_b2}",
+                                distance(s1i1, s2i1) + distance(s1i2, s2i2),
+                                f"{s1i1}-{s1i2} {s2i1}-{s2i2}",
+                                f"{s1i1_name}-{s1i2_name} {s2i1_name}-{s2i2_name}",
                             )
                         )
         dist, compared_seqs, flip_conf = min(flips, key=lambda x: x[0])
